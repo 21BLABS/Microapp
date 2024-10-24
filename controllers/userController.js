@@ -4,7 +4,7 @@ const { verifyTelegramWebAppData } = require("../utils/telegramUtils");
 const logger = require("../utils/logger");
 const { calculateReferralReward } = require("../utils/referralUtils");
 const Referral = require("../models/Referral");
-3;
+
 // const { getCachedUser, updateCachedUser } = require('../utils/userCache');
 // const { queueLeaderboardUpdate } = require("../jobs/jobQueue");
 const Quest = require("../models/Quest");
@@ -271,62 +271,47 @@ const distributeReferralXP = async (userId, xpGained) => {
 };
 
 exports.tap = async (req, res) => {
+  const session = await User.startSession();
   try {
-    const userId = req.user.telegramId;
-    const { count = 1 } = req.body;
+    let result;
+    await session.withTransaction(async () => {
+      const userId = req.user.telegramId;
+      const { count = 1 } = req.body;
 
-    let user = await User.findOne({ telegramId: userId });
+      let user = await User.findOne({ telegramId: userId }).session(session);
+      if (!user) {
+        throw new Error('User not found');
+      }
 
-    if (!user) {
-      logger.warn(`User not found: ${userId}`);
-      return res.status(404).json({ message: "User not found" });
-    }
+      const now = new Date();
+      const xpBefore = user.xp;
+      const xpGained = user.computePower * count;
+      
+      user.xp += xpGained;
+      user.compute += xpGained;
+      user.totalTaps += count;
+      user.lastTapTime = now;
 
-    const now = new Date();
-    // if (user.cooldownEndTime && now < user.cooldownEndTime) {
-    //   logger.info(
-    //     `Cooldown active for user ${userId} until ${user.cooldownEndTime}`
-    //   );
-    //   return res.status(400).json({
-    //     message: "Cooling down",
-    //     cooldownEndTime: user.cooldownEndTime,
-    //   });
-    // }
+      await user.save({ session });
+      await exports.processReferralReward(user._id, xpGained);
 
-    const xpBefore = user.xp;
-    const xpGained = user.computePower * count;
-    user.xp += xpGained;
-    user.compute += xpGained;
-    user.totalTaps += count;
-    user.lastTapTime = now;
-
-    // if (user.totalTaps % 500 === 0) {
-    //   user.cooldownEndTime = new Date(now.getTime() + 10 * 1000); // 10 seconds cooldown
-    //   logger.info(`Cooldown initiated for user ${userId}`);
-    // }
-
-    await user.save();
-
-    // await queueLeaderboardUpdate(user.telegramId, user.xp);
-
-    await distributeReferralXP(user._id, xpGained);
-
-    logger.info(
-      `Tap successful for user ${userId}. XP: ${xpBefore} -> ${user.xp}`
-    );
-
-    res.json({
-      message: "Tap successful",
-      xpGained,
-      xpBefore,
-      newTotalXp: user.xp,
-      totalTaps: user.totalTaps,
-      computePower: user.computePower,
-      cooldownEndTime: user.cooldownEndTime,
+      result = {
+        message: 'Tap successful',
+        xpGained,
+        xpBefore,
+        newTotalXp: user.xp,
+        totalTaps: user.totalTaps,
+        computePower: user.computePower
+      };
     });
+
+    res.json(result);
   } catch (error) {
-    logger.error(`Tap error for user ${req.user.telegramId}:`, error);
-    res.status(500).json({ message: "Server error", error: error.message });
+    logger.error(`Tap error: ${error.message}`);
+    res.status(error.message === 'User not found' ? 404 : 500)
+       .json({ message: error.message || 'Server error' });
+  } finally {
+    session.endSession();
   }
 };
 
