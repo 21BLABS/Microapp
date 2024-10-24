@@ -262,6 +262,33 @@ exports.getReferralStats = async (req, res) => {
   }
 };
 
+exports.getUserReferralRewards = async (userId) => {
+    try {
+        const referrals = await Referral.find({
+            referred: userId,
+            isActive: true
+        })
+        .populate('referrer', 'username telegramId')
+        .select('tier totalRewardsDistributed dateReferred lastRewardDate')
+        .sort('tier');
 
+        return {
+            rewards: referrals.map(ref => ({
+                referrer: {
+                    username: ref.referrer.username,
+                    telegramId: ref.referrer.telegramId
+                },
+                tier: ref.tier,
+                totalRewards: ref.totalRewardsDistributed,
+                startDate: ref.dateReferred,
+                lastRewardDate: ref.lastRewardDate
+            })),
+            totalRewardsReceived: referrals.reduce((sum, ref) => sum + ref.totalRewardsDistributed, 0)
+        };
+    } catch (error) {
+        logger.error(`Error fetching user referral rewards: ${error.message}`);
+        throw error;
+    }
+};
 
 module.exports = exports;
